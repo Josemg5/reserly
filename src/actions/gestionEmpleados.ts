@@ -16,41 +16,48 @@ function getAdminClient() {
     );
 }
 
-export async function crearEmpleado(nombre: string, email: string, password: string, idPeluqueria: string) {
-    if (!nombre || !email || !password || !idPeluqueria) {
+export async function crearEmpleado(nombre: string, email: string | null | undefined, password: string | null | undefined, idPeluqueria: string) {
+    if (!nombre || !idPeluqueria) {
         return { success: false, error: 'Faltan campos obligatorios' };
     }
 
     try {
         const supabaseAdmin = getAdminClient();
 
-        const { data: authData, error: authError } = await supabaseAdmin.auth.admin.createUser({
-            email,
-            password,
-            email_confirm: true
-        });
+        if (email && password) {
+            const { data: authData, error: authError } = await supabaseAdmin.auth.admin.createUser({
+                email,
+                password,
+                email_confirm: true
+            });
 
-        if (authError || !authData?.user) {
-            return { success: false, error: authError?.message || 'Error al crear usuario en Auth' };
-        }
+            if (authError || !authData?.user) {
+                return { success: false, error: authError?.message || 'Error al crear usuario en Auth' };
+            }
 
-        const userId = authData.user.id;
+            const userId = authData.user.id;
 
-        let empRes = await supabaseAdmin.from('empleados').insert({ nombre: nombre, id_peluqueria: idPeluqueria }).select().single();
+            let empRes = await supabaseAdmin.from('empleados').insert({ nombre: nombre, id_peluqueria: idPeluqueria }).select().single();
 
-        if (empRes.error || !empRes.data) {
-            await supabaseAdmin.auth.admin.deleteUser(userId);
-            return { success: false, error: empRes.error?.message || 'Error al registrar en empleados' };
-        }
+            if (empRes.error || !empRes.data) {
+                await supabaseAdmin.auth.admin.deleteUser(userId);
+                return { success: false, error: empRes.error?.message || 'Error al registrar en empleados' };
+            }
 
-        const empleadoId = empRes.data.id;
+            const empleadoId = empRes.data.id;
 
-        let perRes = await supabaseAdmin.from('perfiles').update({ rol: 'empleado', id_peluqueria: idPeluqueria, id_empleado: empleadoId }).eq('id', userId);
+            let perRes = await supabaseAdmin.from('perfiles').update({ rol: 'empleado', id_peluqueria: idPeluqueria, id_empleado: empleadoId }).eq('id', userId);
 
-        if (perRes.error) {
-            await supabaseAdmin.from('empleados').delete().eq('id', empleadoId);
-            await supabaseAdmin.auth.admin.deleteUser(userId);
-            return { success: false, error: perRes.error.message };
+            if (perRes.error) {
+                await supabaseAdmin.from('empleados').delete().eq('id', empleadoId);
+                await supabaseAdmin.auth.admin.deleteUser(userId);
+                return { success: false, error: perRes.error.message };
+            }
+        } else {
+            let empRes = await supabaseAdmin.from('empleados').insert({ nombre: nombre, id_peluqueria: idPeluqueria }).select().single();
+            if (empRes.error || !empRes.data) {
+                return { success: false, error: empRes.error?.message || 'Error al registrar en empleados' };
+            }
         }
 
         revalidatePath('/admin/empleados');

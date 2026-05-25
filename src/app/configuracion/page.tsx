@@ -295,11 +295,45 @@ export default function ConfiguracionPage() {
 
     const handleAddEmpleado = async (e: React.FormEvent) => {
         e.preventDefault();
-        if (!peluqueria || !nuevoEmpleado.nombre || !nuevoEmpleado.email || !nuevoEmpleado.password) return;
+        if (!peluqueria || !nuevoEmpleado.nombre) return;
+
+        const hasEmail = !!nuevoEmpleado.email.trim();
+        const hasPassword = !!nuevoEmpleado.password;
+
+        if ((hasEmail && !hasPassword) || (!hasEmail && hasPassword)) {
+            alert('Para dar acceso es necesario rellenar tanto el Email como la Contraseña. Si solo deseas registrar el perfil sin acceso, deja ambos campos vacíos.');
+            return;
+        }
+
+        if (hasEmail && hasPassword && nuevoEmpleado.password.length < 6) {
+            alert('La contraseña debe tener al menos 6 caracteres.');
+            return;
+        }
+
         setSaving(true);
-        const res = await crearEmpleado(nuevoEmpleado.nombre, nuevoEmpleado.email, nuevoEmpleado.password, peluqueria.id);
+        const emailVal = hasEmail ? nuevoEmpleado.email.trim() : null;
+        const passVal = hasPassword ? nuevoEmpleado.password : null;
+
+        const res = await crearEmpleado(nuevoEmpleado.nombre.trim(), emailVal, passVal, peluqueria.id);
         if (res.success) {
             setNuevoEmpleado({ nombre: '', email: '', password: '' });
+            await loadData();
+            await revalidateApp();
+        } else {
+            alert(res.error);
+        }
+        setSaving(false);
+    };
+
+    const handleAutoRegistro = async () => {
+        if (!peluqueria) return;
+        const nombrePorDefecto = userProfile?.nombre || '';
+        const nombre = window.prompt('Introduce tu nombre profesional para mostrar en el calendario de reservas:', nombrePorDefecto);
+        if (!nombre || !nombre.trim()) return;
+
+        setSaving(true);
+        const res = await crearEmpleado(nombre.trim(), null, null, peluqueria.id);
+        if (res.success) {
             await loadData();
             await revalidateApp();
         } else {
@@ -613,37 +647,46 @@ export default function ConfiguracionPage() {
 
                             {activeTab === 'empleados' && (
                                 <div className="space-y-8">
-                                    <div>
-                                        <h2 className="text-xl font-semibold text-white border-b border-neutral-800 pb-4 mb-6">
+                                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-neutral-800 pb-4 mb-6">
+                                        <h2 className="text-xl font-semibold text-white">
                                             Añadir Acceso a Profesional
                                         </h2>
-                                        <form onSubmit={handleAddEmpleado} className="grid grid-cols-1 md:grid-cols-3 gap-4 items-end mb-8">
-                                            <div>
-                                                <label className="block text-xs font-medium text-neutral-500 mb-1.5 uppercase tracking-wider">Nombre</label>
-                                                <div className="relative">
-                                                    <User className="absolute left-4 top-1/2 -translate-y-1/2 h-4 w-4 text-neutral-500" />
-                                                    <input type="text" placeholder="Ana Martínez" required value={nuevoEmpleado.nombre} onChange={e => setNuevoEmpleado({ ...nuevoEmpleado, nombre: e.target.value })} className="w-full bg-neutral-950/50 border border-neutral-800 rounded-xl pl-11 pr-4 py-3 text-white outline-none focus:border-indigo-500 text-sm" />
-                                                </div>
-                                            </div>
-                                            <div>
-                                                <label className="block text-xs font-medium text-neutral-500 mb-1.5 uppercase tracking-wider">Email (Login)</label>
-                                                <div className="relative">
-                                                    <Mail className="absolute left-4 top-1/2 -translate-y-1/2 h-4 w-4 text-neutral-500" />
-                                                    <input type="email" placeholder="ana@empresa.com" required value={nuevoEmpleado.email} onChange={e => setNuevoEmpleado({ ...nuevoEmpleado, email: e.target.value })} className="w-full bg-neutral-950/50 border border-neutral-800 rounded-xl pl-11 pr-4 py-3 text-white outline-none focus:border-indigo-500 text-sm" />
-                                                </div>
-                                            </div>
-                                            <div>
-                                                <label className="block text-xs font-medium text-neutral-500 mb-1.5 uppercase tracking-wider">Contraseña Temporal</label>
-                                                <div className="flex gap-2 relative">
-                                                    <Lock className="absolute left-4 top-1/2 -translate-y-1/2 h-4 w-4 text-neutral-500 z-10" />
-                                                    <input type="password" required minLength={6} placeholder="Min. 6 letras" value={nuevoEmpleado.password} onChange={e => setNuevoEmpleado({ ...nuevoEmpleado, password: e.target.value })} className="w-full bg-neutral-950/50 border border-neutral-800 rounded-xl pl-11 pr-4 py-3 text-white outline-none focus:border-indigo-500 text-sm" />
-                                                    <button type="submit" disabled={saving} className="bg-indigo-600 hover:bg-indigo-500 text-white px-5 py-3 rounded-xl font-medium transition-colors disabled:opacity-50 flex items-center justify-center gap-2 shrink-0">
-                                                        {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
-                                                    </button>
-                                                </div>
-                                            </div>
-                                        </form>
+                                        <button
+                                            type="button"
+                                            disabled={saving}
+                                            onClick={handleAutoRegistro}
+                                            className="bg-indigo-600/20 border border-indigo-500/30 text-indigo-400 px-5 py-2.5 rounded-xl text-sm font-semibold hover:bg-indigo-600/30 transition-all flex items-center gap-2 shadow-sm"
+                                        >
+                                            <User className="h-4 w-4" />
+                                            Añadirme como Profesional
+                                        </button>
                                     </div>
+                                    <form onSubmit={handleAddEmpleado} className="grid grid-cols-1 md:grid-cols-3 gap-4 items-end mb-8">
+                                        <div>
+                                            <label className="block text-xs font-medium text-neutral-500 mb-1.5 uppercase tracking-wider">Nombre *</label>
+                                            <div className="relative">
+                                                <User className="absolute left-4 top-1/2 -translate-y-1/2 h-4 w-4 text-neutral-500" />
+                                                <input type="text" placeholder="Ana Martínez" required value={nuevoEmpleado.nombre} onChange={e => setNuevoEmpleado({ ...nuevoEmpleado, nombre: e.target.value })} className="w-full bg-neutral-950/50 border border-neutral-800 rounded-xl pl-11 pr-4 py-3 text-white outline-none focus:border-indigo-500 text-sm" />
+                                            </div>
+                                        </div>
+                                        <div>
+                                            <label className="block text-xs font-medium text-neutral-500 mb-1.5 uppercase tracking-wider">Email (Acceso Opcional)</label>
+                                            <div className="relative">
+                                                <Mail className="absolute left-4 top-1/2 -translate-y-1/2 h-4 w-4 text-neutral-500" />
+                                                <input type="email" placeholder="ana@empresa.com" value={nuevoEmpleado.email} onChange={e => setNuevoEmpleado({ ...nuevoEmpleado, email: e.target.value })} className="w-full bg-neutral-950/50 border border-neutral-800 rounded-xl pl-11 pr-4 py-3 text-white outline-none focus:border-indigo-500 text-sm" />
+                                            </div>
+                                        </div>
+                                        <div>
+                                            <label className="block text-xs font-medium text-neutral-500 mb-1.5 uppercase tracking-wider">Contraseña (Acceso Opcional)</label>
+                                            <div className="flex gap-2 relative">
+                                                <Lock className="absolute left-4 top-1/2 -translate-y-1/2 h-4 w-4 text-neutral-500 z-10" />
+                                                <input type="password" placeholder="Min. 6 letras" value={nuevoEmpleado.password} onChange={e => setNuevoEmpleado({ ...nuevoEmpleado, password: e.target.value })} className="w-full bg-neutral-950/50 border border-neutral-800 rounded-xl pl-11 pr-4 py-3 text-white outline-none focus:border-indigo-500 text-sm" />
+                                                <button type="submit" disabled={saving} className="bg-indigo-600 hover:bg-indigo-500 text-white px-5 py-3 rounded-xl font-medium transition-colors disabled:opacity-50 flex items-center justify-center gap-2 shrink-0">
+                                                    {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
+                                                </button>
+                                            </div>
+                                        </div>
+                                    </form>
 
                                     <div>
                                         <h3 className="text-sm font-medium text-neutral-400 mb-4 uppercase tracking-wider">Plantilla Actual</h3>

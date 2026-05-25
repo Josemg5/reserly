@@ -41,6 +41,10 @@ export default function DashboardClient() {
   const [isManualModalOpen, setIsManualModalOpen] = useState(false);
   const [calMonth, setCalMonth] = useState<number>(0);
   const [calYear, setCalYear] = useState<number>(0);
+  const [chartView, setChartView] = useState<'week' | 'month'>('week');
+  const [chartMonth, setChartMonth] = useState<number>(0);
+  const [chartYear, setChartYear] = useState<number>(0);
+  const [chartMonthStr, setChartMonthStr] = useState<string>('');
   const [manualCita, setManualCita] = useState({
     id_empleado: '',
     id_servicio: '',
@@ -123,6 +127,16 @@ export default function DashboardClient() {
     });
   };
 
+  const handleMonthInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const val = e.target.value;
+    setChartMonthStr(val);
+    if (val) {
+      const [y, m] = val.split('-').map(Number);
+      setChartYear(y);
+      setChartMonth(m - 1);
+    }
+  };
+
   useEffect(() => {
     setIsMounted(true);
     const initDate = new Date();
@@ -130,6 +144,9 @@ export default function DashboardClient() {
     const initMonth = String(initDate.getMonth() + 1).padStart(2, '0');
     const initDay = String(initDate.getDate()).padStart(2, '0');
     setSelectedDate(`${initYear}-${initMonth}-${initDay}`);
+    setChartMonth(initDate.getMonth());
+    setChartYear(initYear);
+    setChartMonthStr(`${initYear}-${initMonth}`);
   }, []);
 
   const { totalDuration, totalPrice } = useMemo(() => {
@@ -303,14 +320,23 @@ export default function DashboardClient() {
       setLoadingStats(true);
 
       const today = new Date();
-      const startOfMonth = new Date(today.getFullYear(), today.getMonth(), 1);
-      const sevenDaysAgo = new Date(today);
-      sevenDaysAgo.setDate(today.getDate() - 6);
-      sevenDaysAgo.setHours(0,0,0,0);
+      let startQuery = new Date();
+      let endQuery = new Date();
+      let startOfMonthForStats = new Date(today.getFullYear(), today.getMonth(), 1);
 
-      const startQuery = startOfMonth < sevenDaysAgo ? startOfMonth : sevenDaysAgo;
-      const endOfDay = new Date();
-      endOfDay.setHours(23, 59, 59, 999);
+      if (chartView === 'week') {
+        const sevenDaysAgo = new Date(today);
+        sevenDaysAgo.setDate(today.getDate() - 6);
+        sevenDaysAgo.setHours(0,0,0,0);
+        
+        startQuery = startOfMonthForStats < sevenDaysAgo ? startOfMonthForStats : sevenDaysAgo;
+        endQuery = new Date(today);
+        endQuery.setHours(23, 59, 59, 999);
+      } else {
+        startOfMonthForStats = new Date(chartYear, chartMonth, 1, 0, 0, 0, 0);
+        startQuery = startOfMonthForStats;
+        endQuery = new Date(chartYear, chartMonth + 1, 0, 23, 59, 59, 999);
+      }
 
       let [citasRes, empRes] = await Promise.all([
         supabase
@@ -318,7 +344,7 @@ export default function DashboardClient() {
           .select('id, estado, fecha_hora_inicio, id_empleado, telefono, servicios(nombre_servicio, precio), empleados(nombre)')
           .eq('id_peluqueria', userProfile.id_peluqueria)
           .gte('fecha_hora_inicio', startQuery.toISOString())
-          .lte('fecha_hora_inicio', endOfDay.toISOString()),
+          .lte('fecha_hora_inicio', endQuery.toISOString()),
         supabase
           .from('Empleados')
           .select('id', { count: 'exact', head: true })
@@ -331,7 +357,7 @@ export default function DashboardClient() {
           .select('id, estado, fecha_hora_inicio, id_empleado, telefono, servicios(nombre_servicio, precio), empleados(nombre)')
           .eq('id_peluqueria', userProfile.id_peluqueria)
           .gte('fecha_hora_inicio', startQuery.toISOString())
-          .lte('fecha_hora_inicio', endOfDay.toISOString());
+          .lte('fecha_hora_inicio', endQuery.toISOString());
       }
       let empCount = empRes.count || 0;
       if (empRes.error && !empCount) {
@@ -349,11 +375,13 @@ export default function DashboardClient() {
       const empCounter: any = {};
       const servCounter: any = {};
 
-      const currentMonthStartTime = startOfMonth.getTime();
+      const currentMonthStartTime = startOfMonthForStats.getTime();
+      const currentMonthEndTime = endQuery.getTime();
       
       allCitas.forEach((c: any) => {
         const cDate = new Date(c.fecha_hora_inicio);
-        if (cDate.getTime() >= currentMonthStartTime && c.estado !== 'no_asistio') {
+        const cTime = cDate.getTime();
+        if (cTime >= currentMonthStartTime && cTime <= currentMonthEndTime && c.estado !== 'no_asistio') {
           totalCitas++;
           
           let p = Number(c.servicios?.precio) || 0;
@@ -398,38 +426,92 @@ export default function DashboardClient() {
 
       const dDays = ['Dom','Lun','Mar','Mié','Jue','Vie','Sáb'];
       const chartMap: any = {};
-      for (let i = 6; i >= 0; i--) {
-         const d = new Date(today);
-         d.setDate(today.getDate() - i);
-         const key = `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
-         chartMap[key] = { dia: dDays[d.getDay()], ingresos: 0, citas: 0 };
+      
+      if (chartView === 'week') {
+        for (let i = 6; i >= 0; i--) {
+           const d = new Date(today);
+           d.setDate(today.getDate() - i);
+           const key = `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+           chartMap[key] = { dia: dDays[d.getDay()], ingresos: 0, citas: 0 };
+        }
+
+        const sevenDaysAgo = new Date(today);
+        sevenDaysAgo.setDate(today.getDate() - 6);
+        sevenDaysAgo.setHours(0,0,0,0);
+        const sevenDaysStartTime = sevenDaysAgo.getTime();
+
+        allCitas.forEach((c: any) => {
+           const cd = new Date(c.fecha_hora_inicio);
+           if (cd.getTime() >= sevenDaysStartTime && c.estado !== 'no_asistio') {
+              const k = `${cd.getFullYear()}-${cd.getMonth()}-${cd.getDate()}`;
+              if (chartMap[k]) {
+                 chartMap[k].citas++;
+                 let xp = Number(c.servicios?.precio) || 0;
+                 if (c.telefono && c.telefono.includes('Servicios múltiples seleccionados:')) {
+                    const parts = c.telefono.split('Servicios múltiples seleccionados:');
+                    if (parts.length > 1) {
+                      const servicesString = parts[1].trim();
+                       const individualServices = servicesString.split(',').map((s: string) => s.trim());
+                      let calcP = 0;
+                      individualServices.forEach((sN: string) => {
+                         const srcS = serviciosExtra.find(sx => sx.nombre_servicio === sN);
+                         if (srcS) calcP += Number(srcS.precio);
+                      });
+                      if (calcP > 0) xp = calcP;
+                    }
+                 }
+                 chartMap[k].ingresos += xp;
+              }
+           }
+        });
       }
 
-      const sevenDaysStartTime = sevenDaysAgo.getTime();
-      allCitas.forEach((c: any) => {
-         const cd = new Date(c.fecha_hora_inicio);
-         if (cd.getTime() >= sevenDaysStartTime && c.estado !== 'no_asistio') {
-            const k = `${cd.getFullYear()}-${cd.getMonth()}-${cd.getDate()}`;
-            if (chartMap[k]) {
-               chartMap[k].citas++;
-               let xp = Number(c.servicios?.precio) || 0;
-               if (c.telefono && c.telefono.includes('Servicios múltiples seleccionados:')) {
-                  const parts = c.telefono.split('Servicios múltiples seleccionados:');
-                  if (parts.length > 1) {
-                    const servicesString = parts[1].trim();
-                     const individualServices = servicesString.split(',').map((s: string) => s.trim());
-                    let calcP = 0;
-                    individualServices.forEach((sN: string) => {
-                       const srcS = serviciosExtra.find(sx => sx.nombre_servicio === sN);
-                       if (srcS) calcP += Number(srcS.precio);
-                    });
-                    if (calcP > 0) xp = calcP;
-                  }
-               }
-               chartMap[k].ingresos += xp;
-            }
-         }
-      });
+      const chartDataArray = [
+        { dia: '1-7', ingresos: 0, citas: 0 },
+        { dia: '8-14', ingresos: 0, citas: 0 },
+        { dia: '15-21', ingresos: 0, citas: 0 },
+        { dia: '22-28', ingresos: 0, citas: 0 },
+        { dia: '29+', ingresos: 0, citas: 0 }
+      ];
+
+      if (chartView === 'month') {
+        allCitas.forEach((c: any) => {
+           const cd = new Date(c.fecha_hora_inicio);
+           if (cd.getTime() >= currentMonthStartTime && cd.getTime() <= currentMonthEndTime && c.estado !== 'no_asistio') {
+              let xp = Number(c.servicios?.precio) || 0;
+              if (c.telefono && c.telefono.includes('Servicios múltiples seleccionados:')) {
+                 const parts = c.telefono.split('Servicios múltiples seleccionados:');
+                 if (parts.length > 1) {
+                   const servicesString = parts[1].trim();
+                    const individualServices = servicesString.split(',').map((s: string) => s.trim());
+                   let calcP = 0;
+                   individualServices.forEach((sN: string) => {
+                      const srcS = serviciosExtra.find(sx => sx.nombre_servicio === sN);
+                      if (srcS) calcP += Number(srcS.precio);
+                   });
+                   if (calcP > 0) xp = calcP;
+                 }
+              }
+              const dayOfMonth = cd.getDate();
+              if (dayOfMonth <= 7) {
+                chartDataArray[0].citas++;
+                chartDataArray[0].ingresos += xp;
+              } else if (dayOfMonth <= 14) {
+                chartDataArray[1].citas++;
+                chartDataArray[1].ingresos += xp;
+              } else if (dayOfMonth <= 21) {
+                chartDataArray[2].citas++;
+                chartDataArray[2].ingresos += xp;
+              } else if (dayOfMonth <= 28) {
+                chartDataArray[3].citas++;
+                chartDataArray[3].ingresos += xp;
+              } else {
+                chartDataArray[4].citas++;
+                chartDataArray[4].ingresos += xp;
+              }
+           }
+        });
+      }
 
       setStatsData({
          ingresosMes: ingresos,
@@ -437,12 +519,12 @@ export default function DashboardClient() {
          empleadoEstrella: empTop || '-',
          servicioEstrella: servTop || '-',
          totalCitasMes: totalCitas,
-         chartData: Object.values(chartMap)
+         chartData: chartView === 'week' ? Object.values(chartMap) : chartDataArray
       });
       setLoadingStats(false);
     }
     loadStats();
-  }, [authLoading, userProfile, serviciosExtra, refreshTrigger]);
+  }, [authLoading, userProfile, serviciosExtra, refreshTrigger, chartView, chartMonth, chartYear]);
 
   useEffect(() => {
     async function fetchCitas() {
@@ -841,27 +923,67 @@ export default function DashboardClient() {
                 </div>
              </div>
              
-             <div className="bg-neutral-900/60 border border-neutral-800/80 rounded-[2rem] p-6 backdrop-blur-md shadow-2xl overflow-hidden" style={{height: 380}}>
-                <div className="flex items-center gap-2 mb-6 pt-2 pl-2">
-                   <BarChart2 className="w-5 h-5 text-indigo-400" />
-                   <h3 className="text-lg font-medium text-white">Actividad (Últimos 7 días)</h3>
-                </div>
-                <div style={{ width: '100%', height: 260 }}>
-                  <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={statsData.chartData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="#262626" vertical={false} />
-                      <XAxis dataKey="dia" stroke="#525252" tick={{ fill: '#a3a3a3', fontSize: 12 }} />
-                      <Tooltip 
-                        contentStyle={{ backgroundColor: '#171717', borderColor: '#262626', borderRadius: '1rem', color: '#fff' }}
-                        itemStyle={{ color: '#818cf8', fontWeight: 600 }}
-                        cursor={{ fill: 'rgba(99, 102, 241, 0.1)' }}
-                        formatter={(val: any) => [`$${Number(val || 0).toFixed(2)}`, 'Ingresos']}
-                      />
-                      <Bar dataKey="ingresos" fill="#6366f1" radius={[6, 6, 0, 0]} />
-                    </BarChart>
-                  </ResponsiveContainer>
-                </div>
-             </div>
+             <div className="bg-neutral-900/60 border border-neutral-800/80 rounded-[2rem] p-6 backdrop-blur-md shadow-2xl overflow-hidden" style={{ minHeight: 380, height: 'auto' }}>
+                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6 pt-2 pl-2">
+                    <div className="flex items-center gap-2">
+                       <BarChart2 className="w-5 h-5 text-indigo-400" />
+                       <h3 className="text-lg font-medium text-white">Actividad</h3>
+                    </div>
+                    
+                    <div className="flex items-center gap-3">
+                       <div className="flex bg-neutral-950 p-1 rounded-xl border border-neutral-800">
+                          <button
+                            type="button"
+                            onClick={() => setChartView('week')}
+                            className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all ${
+                              chartView === 'week'
+                                ? 'bg-indigo-600 text-white shadow-sm'
+                                : 'text-neutral-400 hover:text-white'
+                            }`}
+                          >
+                             7 Días
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setChartView('month')}
+                            className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all ${
+                              chartView === 'month'
+                                ? 'bg-indigo-600 text-white shadow-sm'
+                                : 'text-neutral-400 hover:text-white'
+                            }`}
+                          >
+                             Mes
+                          </button>
+                       </div>
+
+                       {chartView === 'month' && (
+                          <div className="flex bg-neutral-950 px-3 py-1.5 rounded-xl border border-neutral-800 text-xs font-semibold text-neutral-300 transition-all hover:border-neutral-700">
+                            <input
+                              type="month"
+                              value={chartMonthStr}
+                              onChange={handleMonthInputChange}
+                              className="bg-transparent text-neutral-200 outline-none cursor-pointer border-none [color-scheme:dark] w-[130px] font-sans font-semibold text-xs tracking-wider"
+                            />
+                          </div>
+                       )}
+                    </div>
+                 </div>
+                 <div style={{ width: '100%', height: 260 }}>
+                   <ResponsiveContainer width="100%" height="100%">
+                     <BarChart data={statsData.chartData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+                       <CartesianGrid strokeDasharray="3 3" stroke="#262626" vertical={false} />
+                       <XAxis dataKey="dia" stroke="#525252" tick={{ fill: '#a3a3a3', fontSize: 12 }} />
+                       <Tooltip 
+                         contentStyle={{ backgroundColor: '#171717', borderColor: '#262626', borderRadius: '1rem', color: '#fff' }}
+                         itemStyle={{ color: '#818cf8', fontWeight: 600 }}
+                         cursor={{ fill: 'rgba(99, 102, 241, 0.1)' }}
+                         formatter={(val: any) => [`$${Number(val || 0).toFixed(2)}`, 'Ingresos']}
+                       />
+                       <Bar dataKey="ingresos" fill="#6366f1" radius={[6, 6, 0, 0]} />
+                     </BarChart>
+                   </ResponsiveContainer>
+                 </div>
+              </div>
           </div>
         )}
 
@@ -999,11 +1121,11 @@ export default function DashboardClient() {
                         </div>
                       </div>
                       <div className="flex items-center justify-between sm:justify-end gap-6 sm:w-1/3 pl-14 sm:pl-0">
-                        <div className="text-right sm:text-left">
+                        <div className="text-right sm:text-left flex-1 min-w-0">
                           <p className="text-sm font-medium text-neutral-200">{serviceName}</p>
                           <p className="text-indigo-400 font-semibold tracking-tight">${price}</p>
                         </div>
-                        <div>
+                        <div className="flex items-center gap-3 shrink-0 flex-nowrap">
                           {cita.estado === 'pendiente' && (
                             <span className="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-amber-500/10 text-amber-500 border border-amber-500/20 shadow-inner">
                               Pendiente
@@ -1023,7 +1145,7 @@ export default function DashboardClient() {
                           {userProfile?.rol === 'admin' && (
                             <button
                                 onClick={() => handleDeleteCita(cita)}
-                                className="ml-3 p-2 rounded-full text-neutral-500 hover:bg-rose-500/10 hover:text-rose-400 transition-colors cursor-pointer"
+                                className="p-2 rounded-full text-neutral-500 hover:bg-rose-500/10 hover:text-rose-400 transition-colors cursor-pointer"
                                 title="Eliminar cita"
                             >
                                 <Trash2 className="w-4 h-4" />
