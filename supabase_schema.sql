@@ -3,7 +3,8 @@ CREATE TABLE Peluquerias (
   nombre_negocio TEXT NOT NULL,
   tipo_publico TEXT NOT NULL CHECK (tipo_publico IN ('hombres', 'mujeres', 'mixta')),
   horario_apertura TIME NOT NULL,
-  horario_cierre TIME NOT NULL
+  horario_cierre TIME NOT NULL,
+  activo BOOLEAN NOT NULL DEFAULT true
 );
 
 CREATE TABLE Empleados (

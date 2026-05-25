@@ -8,10 +8,11 @@ export default function ClientDate({ date, className, style, onlyHour = false }:
 
     useEffect(() => {
         setMounted(true);
-        const d = new Date(date);
-        const timeString = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-        setFormattedDate(onlyHour ? timeString.split(' ')[0] : timeString);
-    }, [date, onlyHour]);
+    }, []);
+
+    const d = new Date(date);
+    const timeString = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const finalFormattedDate = onlyHour ? timeString.split(' ')[0] : timeString;
 
     if (!mounted) {
         return <span className={className} style={style}>--:--</span>;
@@ -19,7 +20,7 @@ export default function ClientDate({ date, className, style, onlyHour = false }:
 
     return (
         <span className={className} style={style} suppressHydrationWarning>
-            {formattedDate}
+            {finalFormattedDate}
         </span>
     );
 }
