@@ -25,6 +25,8 @@ type Servicio = {
 type Empleado = {
     id: string;
     nombre: string;
+    horario_personalizado?: any;
+    ausencias?: string[];
 };
 
 type HorarioSemanal = {
@@ -78,6 +80,7 @@ export default function BookingForm({ slug }: { slug: string }) {
     const [clientPhone, setClientPhone] = useState("");
     const [clientEmail, setClientEmail] = useState("");
     const [bookingSuccess, setBookingSuccess] = useState(false);
+    const [citasMes, setCitasMes] = useState<Record<string, { fecha_hora_inicio: string; fecha_hora_fin: string }[]>>({});
 
     useEffect(() => {
         const timer = setTimeout(() => {
@@ -164,6 +167,40 @@ export default function BookingForm({ slug }: { slug: string }) {
         loadInitialData();
     }, []);
 
+    const isSingleEmployee = empleados.length === 1;
+    const totalSteps = isSingleEmployee ? 3 : 4;
+
+    useEffect(() => {
+        if (isSingleEmployee && empleados.length === 1) {
+            setSelectedEmployee(empleados[0]);
+        }
+    }, [empleados]);
+
+    const STEP_SERVICIOS = 1;
+    const STEP_PROFESIONAL = 2;
+    const STEP_FECHA = isSingleEmployee ? 2 : 3;
+    const STEP_DATOS = isSingleEmployee ? 3 : 4;
+
+    const nextStep = () => {
+        if (step === STEP_SERVICIOS && isSingleEmployee) {
+            setStep(STEP_FECHA);
+        } else {
+            setStep(prev => Math.min(prev + 1, STEP_DATOS));
+        }
+    };
+
+    const prevStep = () => {
+        if (step === STEP_FECHA && isSingleEmployee) {
+            setStep(STEP_SERVICIOS);
+        } else {
+            setStep(prev => Math.max(prev - 1, 1));
+        }
+    };
+
+    const displayStep = isSingleEmployee
+        ? step === STEP_SERVICIOS ? 1 : step === STEP_FECHA ? 2 : 3
+        : step;
+
     const totalDuration = selectedServices.reduce((acc, curr) => acc + curr.duracion_minutos, 0);
     const totalPrice = selectedServices.reduce((acc, curr) => acc + Number(curr.precio), 0);
     const serviceNames = selectedServices.map(s => s.nombre_servicio).join(', ');
@@ -174,6 +211,51 @@ export default function BookingForm({ slug }: { slug: string }) {
         }
     }, [selectedDate, selectedEmployee, selectedServices, peluqueria, horarios, diasCerrados, totalDuration]);
 
+    useEffect(() => {
+        if (!selectedEmployee) return;
+
+        const year = currentMonth.getFullYear();
+        const month = currentMonth.getMonth();
+        const firstDay = new Date(year, month, 1);
+        const lastDay = new Date(year, month + 1, 0, 23, 59, 59, 999);
+
+        const fetchCitasMes = async () => {
+            let res = await supabase
+                .from('Citas')
+                .select('fecha_hora_inicio, fecha_hora_fin, estado')
+                .eq('id_empleado', selectedEmployee.id)
+                .gte('fecha_hora_inicio', firstDay.toISOString())
+                .lte('fecha_hora_fin', lastDay.toISOString());
+            if (!res.data || res.data.length === 0) {
+                res = await supabase
+                    .from('citas')
+                    .select('fecha_hora_inicio, fecha_hora_fin, estado')
+                    .eq('id_empleado', selectedEmployee.id)
+                    .gte('fecha_hora_inicio', firstDay.toISOString())
+                    .lte('fecha_hora_fin', lastDay.toISOString());
+            }
+            const citas = (res.data || []).filter((c: any) => c.estado !== 'no_asistio');
+            const mapa: Record<string, { fecha_hora_inicio: string; fecha_hora_fin: string }[]> = {};
+            for (const cita of citas) {
+                const ds = new Date(cita.fecha_hora_inicio);
+                const key = `${ds.getFullYear()}-${String(ds.getMonth() + 1).padStart(2, '0')}-${String(ds.getDate()).padStart(2, '0')}`;
+                if (!mapa[key]) mapa[key] = [];
+                mapa[key].push(cita);
+            }
+            setCitasMes(mapa);
+        };
+
+        fetchCitasMes();
+
+        const channel = supabase
+            .channel(`citas-mes-${selectedEmployee.id}-${year}-${month}`)
+            .on('postgres_changes', { event: '*', schema: 'public', table: 'Citas' }, fetchCitasMes)
+            .on('postgres_changes', { event: '*', schema: 'public', table: 'citas' }, fetchCitasMes)
+            .subscribe();
+
+        return () => { supabase.removeChannel(channel); };
+    }, [selectedEmployee, currentMonth]);
+
     const calculateSlots = async () => {
         if (!selectedDate || !selectedEmployee || selectedServices.length === 0 || !peluqueria) return;
 
@@ -182,6 +264,12 @@ export default function BookingForm({ slug }: { slug: string }) {
         setLockReason(null);
 
         const localDateStr = new Date(selectedDate.getTime() - (selectedDate.getTimezoneOffset() * 60000)).toISOString().split('T')[0];
+
+        if (selectedEmployee.ausencias && selectedEmployee.ausencias.includes(localDateStr)) {
+            setLockReason("El profesional no estará disponible en esta fecha.");
+            setSlotsLoading(false);
+            return;
+        }
 
         const fechaCerrada = diasCerrados.find(dc => dc.fecha === localDateStr);
         if (fechaCerrada) {
@@ -193,10 +281,28 @@ export default function BookingForm({ slug }: { slug: string }) {
         const numDiaSemana = selectedDate.getDay();
         const horarioDia = horarios.find(h => h.dia_semana === numDiaSemana);
 
-        if (!horarioDia || !horarioDia.abierto) {
-            setLockReason("El centro no abre los " + DIAS_SEMANA[numDiaSemana] + "s.");
-            setSlotsLoading(false);
-            return;
+        let esPersonalizado = false;
+        let diaPersonalizado = null;
+
+        if (selectedEmployee.horario_personalizado && Array.isArray(selectedEmployee.horario_personalizado)) {
+            diaPersonalizado = selectedEmployee.horario_personalizado.find((h: any) => h.dia === numDiaSemana);
+            if (diaPersonalizado) {
+                esPersonalizado = true;
+            }
+        }
+
+        if (esPersonalizado && diaPersonalizado) {
+            if (!diaPersonalizado.activo) {
+                setLockReason("El profesional no trabaja los " + DIAS_SEMANA[numDiaSemana] + "s.");
+                setSlotsLoading(false);
+                return;
+            }
+        } else {
+            if (!horarioDia || !horarioDia.abierto) {
+                setLockReason("El centro no abre los " + DIAS_SEMANA[numDiaSemana] + "s.");
+                setSlotsLoading(false);
+                return;
+            }
         }
 
         const startOfDay = new Date(selectedDate);
@@ -225,12 +331,37 @@ export default function BookingForm({ slug }: { slug: string }) {
 
         const parseTime = (timeStr: string) => timeStr ? timeStr.split(':').map(Number) : [24, 0];
 
-        const [openH, openM] = parseTime(horarioDia.inicio_manana);
-        const [closeH, closeM] = parseTime(horarioDia.fin_manana);
+        let openH, openM, closeH, closeM;
+        let hasTarde = false;
+        let openTardeH = 24, openTardeM = 0, closeTardeH = 24, closeTardeM = 0;
 
-        const hasTarde = !!horarioDia.inicio_tarde && !!horarioDia.fin_tarde;
-        const [openTardeH, openTardeM] = parseTime(horarioDia.inicio_tarde);
-        const [closeTardeH, closeTardeM] = parseTime(horarioDia.fin_tarde);
+        if (esPersonalizado && diaPersonalizado) {
+            const [opH, opM] = parseTime(diaPersonalizado.apertura);
+            const [clH, clM] = parseTime(diaPersonalizado.cierre);
+            openH = opH;
+            openM = opM;
+            closeH = clH;
+            closeM = clM;
+        } else if (horarioDia) {
+            const [opH, opM] = parseTime(horarioDia.inicio_manana);
+            const [clH, clM] = parseTime(horarioDia.fin_manana);
+            openH = opH;
+            openM = opM;
+            closeH = clH;
+            closeM = clM;
+            hasTarde = !!horarioDia.inicio_tarde && !!horarioDia.fin_tarde;
+            const [opTH, opTM] = parseTime(horarioDia.inicio_tarde);
+            const [clTH, clTM] = parseTime(horarioDia.fin_tarde);
+            openTardeH = opTH;
+            openTardeM = opTM;
+            closeTardeH = clTH;
+            closeTardeM = clTM;
+        } else {
+            openH = 24;
+            openM = 0;
+            closeH = 24;
+            closeM = 0;
+        }
 
         let currentSlot = new Date(selectedDate);
         currentSlot.setHours(openH, openM, 0, 0);
@@ -245,6 +376,7 @@ export default function BookingForm({ slug }: { slug: string }) {
         endTardeWindow.setHours(closeTardeH, closeTardeM, 0, 0);
 
         const now = new Date();
+        const nowBuffer = new Date(now.getTime() + 30 * 60000);
         const absoluteEndWindow = hasTarde ? endTardeWindow : endWindow;
 
         while (currentSlot < absoluteEndWindow) {
@@ -253,7 +385,7 @@ export default function BookingForm({ slug }: { slug: string }) {
             const inMorningBlock = (currentSlot >= new Date(new Date(selectedDate).setHours(openH, openM, 0, 0))) && (slotEnd <= endWindow);
             const inAfternoonBlock = hasTarde && (currentSlot >= startTardeWindow) && (slotEnd <= endTardeWindow);
 
-            if ((inMorningBlock || inAfternoonBlock) && currentSlot > now) {
+            if ((inMorningBlock || inAfternoonBlock) && currentSlot >= nowBuffer) {
                 let isAvailable = true;
 
                 for (const cita of citas) {
@@ -375,6 +507,74 @@ export default function BookingForm({ slug }: { slug: string }) {
     const nextMonthFirstDay = new Date(currentMonth.getFullYear(), currentMonth.getMonth() + 1, 1);
     const canGoNext = nextMonthFirstDay <= maxDate;
 
+    const isDateDisabled = (dateObj: Date): boolean => {
+        const dateStr = new Date(dateObj.getTime() - (dateObj.getTimezoneOffset() * 60000)).toISOString().split('T')[0];
+        const dateObjNorm = new Date(dateObj); dateObjNorm.setHours(0, 0, 0, 0);
+        if (dateObjNorm < today) return true;
+        if (dateObj > maxDate) return true;
+        if (selectedEmployee?.ausencias && selectedEmployee.ausencias.includes(dateStr)) return true;
+        if (diasCerrados.some(dc => dc.fecha === dateStr)) return true;
+        const diaSemana = dateObj.getDay();
+        if (selectedEmployee?.horario_personalizado && Array.isArray(selectedEmployee.horario_personalizado)) {
+            const diaConfig = selectedEmployee.horario_personalizado.find((h: any) => h.dia === diaSemana);
+            if (diaConfig && !diaConfig.activo) return true;
+        } else {
+            const horarioDia = horarios.find(h => h.dia_semana === diaSemana);
+            if (!horarioDia || !horarioDia.abierto) return true;
+        }
+        const duracion = totalDuration > 0 ? totalDuration : 30;
+        const parseTime = (t: string) => t ? t.split(':').map(Number) : [24, 0];
+        let openH: number, openM: number, closeH: number, closeM: number;
+        let hasTarde = false;
+        let openTardeH = 24, openTardeM = 0, closeTardeH = 24, closeTardeM = 0;
+        if (selectedEmployee?.horario_personalizado && Array.isArray(selectedEmployee.horario_personalizado)) {
+            const diaConfig = selectedEmployee.horario_personalizado.find((h: any) => h.dia === diaSemana);
+            if (!diaConfig || !diaConfig.activo) return true;
+            const [opH, opM] = parseTime(diaConfig.apertura);
+            const [clH, clM] = parseTime(diaConfig.cierre);
+            openH = opH; openM = opM; closeH = clH; closeM = clM;
+        } else {
+            const horarioDia = horarios.find(h => h.dia_semana === diaSemana);
+            if (!horarioDia || !horarioDia.abierto) return true;
+            const [opH, opM] = parseTime(horarioDia.inicio_manana);
+            const [clH, clM] = parseTime(horarioDia.fin_manana);
+            openH = opH; openM = opM; closeH = clH; closeM = clM;
+            hasTarde = !!horarioDia.inicio_tarde && !!horarioDia.fin_tarde;
+            if (hasTarde) {
+                const [opTH, opTM] = parseTime(horarioDia.inicio_tarde);
+                const [clTH, clTM] = parseTime(horarioDia.fin_tarde);
+                openTardeH = opTH; openTardeM = opTM; closeTardeH = clTH; closeTardeM = clTM;
+            }
+        }
+        const citasDelDia = citasMes[dateStr] || [];
+        const endWindow = new Date(dateObj); endWindow.setHours(closeH, closeM, 0, 0);
+        const startTardeWindow = new Date(dateObj); startTardeWindow.setHours(openTardeH, openTardeM, 0, 0);
+        const endTardeWindow = new Date(dateObj); endTardeWindow.setHours(closeTardeH, closeTardeM, 0, 0);
+        const absoluteEnd = hasTarde ? endTardeWindow : endWindow;
+        const nowBuffer = new Date(new Date().getTime() + 30 * 60000);
+        let slot = new Date(dateObj); slot.setHours(openH, openM, 0, 0);
+        while (slot < absoluteEnd) {
+            const slotEnd = new Date(slot.getTime() + duracion * 60000);
+            const inMorning = slot >= new Date(new Date(dateObj).setHours(openH, openM, 0, 0)) && slotEnd <= endWindow;
+            const inAfternoon = hasTarde && slot >= startTardeWindow && slotEnd <= endTardeWindow;
+            if ((inMorning || inAfternoon) && slot >= nowBuffer) {
+                let libre = true;
+                for (const cita of citasDelDia) {
+                    const ci = new Date(cita.fecha_hora_inicio);
+                    const cf = new Date(cita.fecha_hora_fin);
+                    if ((slot >= ci && slot < cf) || (slotEnd > ci && slotEnd <= cf) || (slot <= ci && slotEnd >= cf)) {
+                        libre = false;
+                        break;
+                    }
+                }
+                if (libre) return false;
+            }
+            slot.setMinutes(slot.getMinutes() + 10);
+            if (hasTarde && slot >= endWindow && slot < startTardeWindow) slot = new Date(startTardeWindow);
+        }
+        return true;
+    };
+
     const getStartPadding = () => {
         const day = new Date(currentMonth.getFullYear(), currentMonth.getMonth(), 1).getDay();
         return day === 0 ? 6 : day - 1;
@@ -485,17 +685,17 @@ export default function BookingForm({ slug }: { slug: string }) {
                 </h2>
                 <div className="mt-6 w-full max-w-md">
                     <div className="flex justify-between items-center text-xs uppercase tracking-wider text-white/80 mb-2">
-                        <span>Paso {step} de 4</span>
+                        <span>Paso {displayStep} de {totalSteps}</span>
                         <span className="font-semibold text-white">
-                            {step === 1 && "Servicios"}
-                            {step === 2 && "Profesional"}
-                            {step === 3 && "Fecha y Hora"}
-                            {step === 4 && "Tus Datos"}
+                            {step === STEP_SERVICIOS && "Servicios"}
+                            {step === STEP_PROFESIONAL && !isSingleEmployee && "Profesional"}
+                            {step === STEP_FECHA && "Fecha y Hora"}
+                            {step === STEP_DATOS && "Tus Datos"}
                         </span>
                     </div>
                     <div className="flex gap-2">
-                        {[1, 2, 3, 4].map((s) => (
-                            <div key={s} className={`h-1 flex-1 rounded-full transition-all duration-300 ${s <= step ? 'bg-white' : 'bg-white/35'}`} />
+                        {Array.from({ length: totalSteps }, (_, i) => i + 1).map((s) => (
+                            <div key={s} className={`h-1 flex-1 rounded-full transition-all duration-300 ${s <= displayStep ? 'bg-white' : 'bg-white/35'}`} />
                         ))}
                     </div>
                 </div>
@@ -504,7 +704,7 @@ export default function BookingForm({ slug }: { slug: string }) {
             <div className="p-8 text-gray-900">
                 {step > 1 && (
                     <button
-                        onClick={() => setStep(step - 1)}
+                        onClick={prevStep}
                         className="mb-6 flex items-center text-sm font-medium text-gray-500 hover:text-gray-900 transition-colors"
                     >
                         <ArrowLeft className="mr-1 h-4 w-4" /> Volver
@@ -547,7 +747,7 @@ export default function BookingForm({ slug }: { slug: string }) {
                             </div>
                             <button
                                 disabled={selectedServices.length === 0}
-                                onClick={() => setStep(2)}
+                                onClick={nextStep}
                                 className="flex items-center justify-center rounded-xl bg-[var(--brand-color)] px-6 py-3 font-semibold text-white transition-all hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed"
                             >
                                 Continuar <ChevronRight className="ml-2 h-5 w-5" />
@@ -556,7 +756,7 @@ export default function BookingForm({ slug }: { slug: string }) {
                     </div>
                 )}
 
-                {step === 2 && (
+                {step === STEP_PROFESIONAL && !isSingleEmployee && (
                     <div className="animate-in fade-in slide-in-from-right-4 duration-300">
                         <h3 className="mb-6 flex items-center text-xl font-semibold text-gray-900">
                             <User className="mr-2 h-5 w-5 text-gray-500" /> ¿Con quién te gustaría atenderte?
@@ -565,7 +765,7 @@ export default function BookingForm({ slug }: { slug: string }) {
                             {empleados.map((emp) => (
                                 <button
                                     key={emp.id}
-                                    onClick={() => { setSelectedEmployee(emp); setStep(3); }}
+                                    onClick={() => { setSelectedEmployee(emp); nextStep(); }}
                                     className={`flex items-center rounded-2xl border p-5 transition-all hover:border-[var(--brand-color)] ${selectedEmployee?.id === emp.id ? 'border-[var(--brand-color)] bg-[var(--brand-color)] text-white shadow-lg' : 'border-gray-200 bg-gray-50 text-gray-800 hover:bg-gray-100/70'}`}
                                 >
                                     <div className={`mr-4 flex h-12 w-12 items-center justify-center rounded-full font-bold text-lg transition-colors ${selectedEmployee?.id === emp.id ? 'bg-white text-[var(--brand-color)]' : 'bg-gray-200 text-gray-600'}`}>
@@ -578,7 +778,7 @@ export default function BookingForm({ slug }: { slug: string }) {
                     </div>
                 )}
 
-                {step === 3 && (
+                {step === STEP_FECHA && (
                     <div className="animate-in fade-in slide-in-from-right-4 duration-300">
                         <h3 className="mb-6 flex items-center text-xl font-semibold text-gray-900">
                             <Calendar className="mr-2 h-5 w-5 text-gray-500" /> Fecha y Hora
@@ -620,15 +820,7 @@ export default function BookingForm({ slug }: { slug: string }) {
                                 {Array.from({ length: new Date(currentMonth.getFullYear(), currentMonth.getMonth() + 1, 0).getDate() }).map((_, i) => {
                                     const dayNum = i + 1;
                                     const dateObj = new Date(currentMonth.getFullYear(), currentMonth.getMonth(), dayNum);
-                                    
-                                    const dateStr = new Date(dateObj.getTime() - (dateObj.getTimezoneOffset() * 60000)).toISOString().split('T')[0];
-                                    const isPast = dateObj < today;
-                                    const isTooFar = dateObj > maxDate;
-                                    
-                                    const isClosed = diasCerrados.some(dc => dc.fecha === dateStr) ||
-                                        horarios.some(h => h.dia_semana === dateObj.getDay() && !h.abierto);
-                                        
-                                    const isDisabled = isPast || isTooFar || isClosed;
+                                    const disabled = isDateDisabled(dateObj);
                                     const isSelected = selectedDate?.toDateString() === dateObj.toDateString();
                                     const isToday = dateObj.toDateString() === today.toDateString();
 
@@ -636,13 +828,13 @@ export default function BookingForm({ slug }: { slug: string }) {
                                         <button
                                             key={`day-${dayNum}`}
                                             type="button"
-                                            disabled={isDisabled}
-                                            onClick={() => { setSelectedDate(dateObj); setSelectedTime(""); }}
+                                            disabled={disabled}
+                                            onClick={() => { if (!disabled) { setSelectedDate(dateObj); setSelectedTime(""); } }}
                                             className={`w-10 h-10 rounded-full mx-auto flex items-center justify-center transition-colors text-sm font-semibold ${
                                                 isSelected
                                                     ? 'bg-[var(--brand-color)] text-white shadow-md'
-                                                    : isDisabled
-                                                        ? 'text-gray-300 cursor-not-allowed bg-transparent opacity-30'
+                                                    : disabled
+                                                        ? 'text-gray-300 cursor-not-allowed bg-transparent opacity-30 pointer-events-none'
                                                         : isToday
                                                             ? 'text-[var(--brand-color)] font-bold border border-[var(--brand-color)]/30 hover:bg-gray-100'
                                                             : 'text-gray-700 hover:bg-gray-100 bg-transparent'
@@ -696,7 +888,7 @@ export default function BookingForm({ slug }: { slug: string }) {
                         <div className="mt-8">
                             <button
                                 disabled={!selectedDate || !selectedTime || !!lockReason}
-                                onClick={() => setStep(4)}
+                                onClick={nextStep}
                                 className="flex w-full items-center justify-center rounded-xl bg-[var(--brand-color)] px-6 py-4 font-semibold text-white transition-all hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed"
                             >
                                 Continuar <ChevronRight className="ml-2 h-5 w-5" />
@@ -705,7 +897,7 @@ export default function BookingForm({ slug }: { slug: string }) {
                     </div>
                 )}
 
-                {step === 4 && (
+                {step === STEP_DATOS && (
                     <div className="animate-in fade-in slide-in-from-right-4 duration-300">
                         <h3 className="mb-6 text-xl font-semibold text-gray-900">
                             Tus Datos

@@ -122,15 +122,55 @@ export async function getEmpleadosLocal(idPeluqueria: string) {
             const authUser = perfil ? authUsers?.users.find(u => u.id === perfil.id) : null;
             
             return {
-                authId: perfil?.id || null,     // null si es un empleado antiguo/manual sin login
-                empleadoId: emp.id,             // Siempre presente
-                nombre: emp.nombre,             // Siempre presente
-                email: authUser?.email || 'Login deshabilitado'
+                authId: perfil?.id || null,
+                empleadoId: emp.id,
+                nombre: emp.nombre,
+                email: authUser?.email || 'Login deshabilitado',
+                horario_personalizado: emp.horario_personalizado || null,
+                ausencias: emp.ausencias || []
             };
         });
 
         return { success: true, data: mapped };
     } catch (e: any) {
         return { success: false, error: e.message, data: [] };
+    }
+}
+
+export async function actualizarHorarioEmpleado(empleadoId: string, horario: any[] | null) {
+    if (!empleadoId) {
+        return { success: false, error: 'ID de empleado obligatorio' };
+    }
+    try {
+        const supabaseAdmin = getAdminClient();
+        const { error } = await supabaseAdmin
+            .from('empleados')
+            .update({ horario_personalizado: horario })
+            .eq('id', empleadoId);
+        if (error) {
+            return { success: false, error: error.message };
+        }
+        return { success: true };
+    } catch (e: any) {
+        return { success: false, error: e.message || 'Error al actualizar horario' };
+    }
+}
+
+export async function actualizarAusenciasEmpleado(empleadoId: string, ausencias: string[]) {
+    if (!empleadoId) {
+        return { success: false, error: 'ID de empleado obligatorio' };
+    }
+    try {
+        const supabaseAdmin = getAdminClient();
+        const { error } = await supabaseAdmin
+            .from('empleados')
+            .update({ ausencias: ausencias })
+            .eq('id', empleadoId);
+        if (error) {
+            return { success: false, error: error.message };
+        }
+        return { success: true };
+    } catch (e: any) {
+        return { success: false, error: e.message || 'Error al actualizar ausencias' };
     }
 }
