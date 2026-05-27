@@ -10,6 +10,7 @@ function getAdminClient() {
     );
 }
 
+
 export type CrearCitaPayload = {
     id_peluqueria: string;
     id_empleado: string;
