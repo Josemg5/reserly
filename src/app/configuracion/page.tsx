@@ -184,7 +184,10 @@ export default function ConfiguracionPage() {
         setSaving(true);
 
         try {
-            const peluqueriaPayload = { email_contacto: peluqueria.email_contacto || null };
+            const peluqueriaPayload = {
+                email_contacto: peluqueria.email_contacto || null,
+                intervalo_citas: (() => { const v = parseInt(peluqueria.intervalo_citas); return (!isNaN(v) && v >= 5) ? v : 10; })()
+            };
             let pRes = await supabase.from('Peluquerias').update(peluqueriaPayload).eq('id', peluqueria.id);
             if (pRes.error) pRes = await supabase.from('peluquerias').update(peluqueriaPayload).eq('id', peluqueria.id);
         } catch (errP) {
@@ -592,6 +595,22 @@ export default function ConfiguracionPage() {
                                                 placeholder="ej. mi-peluqueria@empresa.com" 
                                                 className="w-full max-w-md bg-neutral-900 border border-neutral-800 rounded-xl px-4 py-3 text-white outline-none focus:border-indigo-500 text-sm"
                                             />
+                                        </div>
+
+                                        <div className="bg-indigo-950/20 border border-indigo-500/20 p-5 rounded-2xl mb-8">
+                                            <label className="block text-sm font-medium text-indigo-300 mb-2">Intervalo de Visualización de Citas</label>
+                                            <p className="text-xs text-indigo-400/70 mb-3">Cadencia en minutos con la que se muestran los huecos disponibles al cliente. Mín: 5 · Máx: 120.</p>
+                                            <div className="flex items-center gap-3">
+                                                <input
+                                                    type="number"
+                                                    min={5}
+                                                    max={120}
+                                                    value={peluqueria?.intervalo_citas ?? 10}
+                                                    onChange={(e) => setPeluqueria(peluqueria ? { ...peluqueria, intervalo_citas: parseInt(e.target.value) } : null)}
+                                                    className="w-28 bg-neutral-900 border border-neutral-800 rounded-xl px-4 py-3 text-white outline-none focus:border-indigo-500 text-sm transition-all [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                                                />
+                                                <span className="text-sm text-indigo-400/70">minutos</span>
+                                            </div>
                                         </div>
 
                                         <div className="space-y-4">

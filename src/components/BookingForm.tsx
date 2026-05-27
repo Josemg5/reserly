@@ -81,6 +81,7 @@ export default function BookingForm({ slug }: { slug: string }) {
     const [clientEmail, setClientEmail] = useState("");
     const [bookingSuccess, setBookingSuccess] = useState(false);
     const [citasMes, setCitasMes] = useState<Record<string, { fecha_hora_inicio: string; fecha_hora_fin: string }[]>>({});
+    const [slotInterval, setSlotInterval] = useState(10);
 
     useEffect(() => {
         const timer = setTimeout(() => {
@@ -92,12 +93,10 @@ export default function BookingForm({ slug }: { slug: string }) {
     useEffect(() => {
         async function loadInitialData() {
             try {
-                let pelDataResult = await supabase.from("Peluquerias").select("id, nombre_negocio, color_marca, logo_url, activo, slug").eq("slug", slug).single();
+                let pelDataResult = await supabase.from("Peluquerias").select("id, nombre_negocio, color_marca, logo_url, activo, slug, intervalo_citas").eq("slug", slug).single();
                 if (!pelDataResult.data) {
-                    pelDataResult = await supabase.from("peluquerias").select("id, nombre_negocio, color_marca, logo_url, activo, slug").eq("slug", slug).single();
+                    pelDataResult = await supabase.from("peluquerias").select("id, nombre_negocio, color_marca, logo_url, activo, slug, intervalo_citas").eq("slug", slug).single();
                 }
-                console.log('DEBUG PELUQUERIA:', { data: pelDataResult.data, error: pelDataResult.error });
-
                 if (pelDataResult.error || !pelDataResult.data) {
                     setFetchError(true);
                 }
@@ -107,6 +106,7 @@ export default function BookingForm({ slug }: { slug: string }) {
                 if (pelDataResult.data) {
                     currentPeluqueria = pelDataResult.data;
                     setPeluqueria(currentPeluqueria as Peluqueria);
+                    setSlotInterval(currentPeluqueria.intervalo_citas && [10, 15, 20, 30, 60].includes(Number(currentPeluqueria.intervalo_citas)) ? Number(currentPeluqueria.intervalo_citas) : 10);
                 }
 
                 let servDataResult = await supabase.from("Servicios").select("*");
@@ -407,7 +407,7 @@ export default function BookingForm({ slug }: { slug: string }) {
                 }
             }
 
-            currentSlot.setMinutes(currentSlot.getMinutes() + 10);
+            currentSlot.setMinutes(currentSlot.getMinutes() + slotInterval);
 
             if (hasTarde && currentSlot >= endWindow && currentSlot < startTardeWindow) {
                 currentSlot = new Date(startTardeWindow);
@@ -569,7 +569,7 @@ export default function BookingForm({ slug }: { slug: string }) {
                 }
                 if (libre) return false;
             }
-            slot.setMinutes(slot.getMinutes() + 10);
+            slot.setMinutes(slot.getMinutes() + slotInterval);
             if (hasTarde && slot >= endWindow && slot < startTardeWindow) slot = new Date(startTardeWindow);
         }
         return true;
@@ -633,7 +633,7 @@ export default function BookingForm({ slug }: { slug: string }) {
         );
     }
 
-    if (fetchError || !peluqueria || peluqueria.activo === false) {
+    if (!loading && (fetchError || !peluqueria || peluqueria.activo === false)) {
         return (
             <div className="mx-auto max-w-md rounded-3xl bg-white border border-gray-200 p-8 text-center shadow-lg">
                 <h2 className="mb-2 text-2xl font-bold tracking-tight text-gray-900">Servicios no disponibles</h2>
