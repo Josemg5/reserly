@@ -2,10 +2,17 @@
 
 import { useEffect, useState, useRef, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
+import dynamic from 'next/dynamic';
 import { supabase } from '@/lib/supabase';
 import ClientDate from '@/components/ClientDate';
-import { Calendar, ChevronDown, LogOut, Settings, User, Trash2, TrendingUp, BarChart2, Star, Users, Activity } from 'lucide-react';
+import { Calendar, ChevronDown, LogOut, Settings, User, Trash2, TrendingUp, BarChart2, Star, Users, Activity, CalendarClock, CalendarIcon } from 'lucide-react';
 import { BarChart, Bar, XAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
+import { DayPicker } from 'react-day-picker';
+import { format } from 'date-fns';
+import { es } from 'date-fns/locale';
+import 'react-day-picker/dist/style.css';
+
+const ModalReprogramar = dynamic(() => import('@/components/ModalReprogramar'), { ssr: false });
 
 const logicalTimeIntervals = [
   "08:00", "08:30", "09:00", "09:30", "10:00", "10:30", "11:00", "11:30",
@@ -39,8 +46,12 @@ export default function DashboardClient() {
   const [authLoading, setAuthLoading] = useState(true);
   const [refreshTrigger, setRefreshTrigger] = useState(0);
   const [isManualModalOpen, setIsManualModalOpen] = useState(false);
+  const [citaAReprogramar, setCitaAReprogramar] = useState<any | null>(null);
   const [calMonth, setCalMonth] = useState<number>(0);
   const [calYear, setCalYear] = useState<number>(0);
+  const [horariosSemanales, setHorariosSemanales] = useState<any[]>([]);
+  const [diasCerrados, setDiasCerrados] = useState<any[]>([]);
+  const [showManualCalendar, setShowManualCalendar] = useState(false);
   const [chartView, setChartView] = useState<'week' | 'month'>('week');
   const [chartMonth, setChartMonth] = useState<number>(0);
   const [chartYear, setChartYear] = useState<number>(0);
@@ -60,71 +71,34 @@ export default function DashboardClient() {
   const [selectedManualServices, setSelectedManualServices] = useState<string[]>([]);
   const [existingCitasEmpleado, setExistingCitasEmpleado] = useState<any[]>([]);
 
-  const monthNames = useMemo(() => [
-    "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio",
-    "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"
-  ], []);
+  const empleadoActualManual = useMemo(
+    () => empleadosSalon.find(e => e.id === manualCita.id_empleado) ?? null,
+    [empleadosSalon, manualCita.id_empleado]
+  );
 
-  const daysInMonth = useMemo(() => {
-    if (!calYear) return [];
-    const date = new Date(calYear, calMonth, 1);
-    const days = [];
-    const totalDays = new Date(calYear, calMonth + 1, 0).getDate();
-    let firstDayIndex = date.getDay();
-    firstDayIndex = firstDayIndex === 0 ? 6 : firstDayIndex - 1;
-    for (let i = 0; i < firstDayIndex; i++) {
-      days.push(null);
-    }
-    for (let d = 1; d <= totalDays; d++) {
-      days.push(new Date(calYear, calMonth, d));
-    }
-    return days;
-  }, [calMonth, calYear]);
+  const isDateDisabled = (date: Date): boolean => {
+    const dateStr = format(date, 'yyyy-MM-dd');
+    const diaSemana = date.getDay();
 
-  const isDateDisabled = (date: Date) => {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const compareDate = new Date(date);
-    compareDate.setHours(0, 0, 0, 0);
-    if (compareDate < today) return true;
-    if (date.getDay() === 0) return true;
+    if (diasCerrados.some(dc => dc.fecha === dateStr)) return true;
+    if (empleadoActualManual?.ausencias?.includes(dateStr)) return true;
+
+    if (empleadoActualManual?.horario_personalizado && Array.isArray(empleadoActualManual.horario_personalizado)) {
+        const diaConfig = empleadoActualManual.horario_personalizado.find((h: any) => h.dia === diaSemana);
+        if (diaConfig && !diaConfig.activo) return true;
+        if (!diaConfig) return true;
+    } else {
+        const horarioDia = horariosSemanales.find(h => h.dia_semana === diaSemana);
+        if (!horarioDia || !horarioDia.abierto) return true;
+    }
     return false;
   };
 
-  const isSelected = (date: Date) => {
-    if (!manualCita.fecha) return false;
-    const [year, month, day] = manualCita.fecha.split('-').map(Number);
-    return date.getDate() === day &&
-      date.getMonth() === month - 1 &&
-      date.getFullYear() === year;
-  };
-
-  const handleSelectDate = (date: Date) => {
-    const y = date.getFullYear();
-    const m = String(date.getMonth() + 1).padStart(2, '0');
-    const d = String(date.getDate()).padStart(2, '0');
-    const dateStr = `${y}-${m}-${d}`;
-    setManualCita(prev => ({ ...prev, fecha: dateStr }));
-  };
-
-  const handlePrevMonth = () => {
-    setCalMonth(prev => {
-      if (prev === 0) {
-        setCalYear(y => y - 1);
-        return 11;
-      }
-      return prev - 1;
-    });
-  };
-
-  const handleNextMonth = () => {
-    setCalMonth(prev => {
-      if (prev === 11) {
-        setCalYear(y => y + 1);
-        return 0;
-      }
-      return prev + 1;
-    });
+  const handleDaySelect = (day: Date | undefined) => {
+    if (day) {
+        setManualCita(prev => ({ ...prev, fecha: format(day, 'yyyy-MM-dd') }));
+    }
+    setShowManualCalendar(false);
   };
 
   const handleMonthInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -195,9 +169,60 @@ export default function DashboardClient() {
 
   const availableManualTimes = useMemo(() => {
     if (!manualCita.fecha) return logicalTimeIntervals;
-    return logicalTimeIntervals.filter(time => {
+    const hoy = new Date();
+    hoy.setHours(0, 0, 0, 0);
+    const selectedDay = new Date(`${manualCita.fecha}T00:00:00`);
+    const isToday = selectedDay.getTime() === hoy.getTime();
+    const now = new Date();
+    const diaSemana = selectedDay.getDay();
+
+    let configDia: any = null;
+    if (empleadoActualManual?.horario_personalizado && Array.isArray(empleadoActualManual.horario_personalizado)) {
+        const diaConfig = empleadoActualManual.horario_personalizado.find((h: any) => h.dia === diaSemana);
+        if (diaConfig && diaConfig.activo) configDia = diaConfig;
+    } else {
+        const horarioDia = horariosSemanales.find(h => h.dia_semana === diaSemana);
+        if (horarioDia && horarioDia.abierto) configDia = horarioDia;
+    }
+
+    let generatedTimes: string[] = [];
+    
+    if (configDia) {
+        const addIntervals = (startStr: string, endStr: string) => {
+            if (!startStr || !endStr) return;
+            const [startH, startM] = startStr.split(':').map(Number);
+            const [endH, endM] = endStr.split(':').map(Number);
+            
+            let current = new Date(selectedDay);
+            current.setHours(startH, startM, 0, 0);
+            
+            const limit = new Date(selectedDay);
+            limit.setHours(endH, endM, 0, 0);
+            
+            while (true) {
+                const candidateEnd = new Date(current.getTime() + totalDuration * 60000);
+                if (candidateEnd > limit) break;
+                
+                const hh = String(current.getHours()).padStart(2, '0');
+                const mm = String(current.getMinutes()).padStart(2, '0');
+                generatedTimes.push(`${hh}:${mm}`);
+                
+                current.setMinutes(current.getMinutes() + 30);
+            }
+        };
+
+        addIntervals(configDia.inicio_manana, configDia.fin_manana);
+        addIntervals(configDia.inicio_tarde, configDia.fin_tarde);
+    } else {
+        generatedTimes = logicalTimeIntervals;
+    }
+
+    return generatedTimes.filter(time => {
       const candidateStart = new Date(`${manualCita.fecha}T${time}:00`);
       const candidateEnd = new Date(candidateStart.getTime() + totalDuration * 60000);
+
+      if (isToday && candidateStart <= now) return false;
+
       const hasOverlap = existingCitasEmpleado.some(cita => {
         const existStart = new Date(cita.fecha_hora_inicio);
         const existEnd = new Date(cita.fecha_hora_fin);
@@ -205,7 +230,7 @@ export default function DashboardClient() {
       });
       return !hasOverlap;
     });
-  }, [manualCita.fecha, existingCitasEmpleado, totalDuration]);
+  }, [manualCita.fecha, existingCitasEmpleado, totalDuration, empleadoActualManual, horariosSemanales]);
 
   useEffect(() => {
     if (availableManualTimes.length > 0) {
@@ -227,6 +252,25 @@ export default function DashboardClient() {
       if (empDataResult.data) {
         setEmpleadosSalon(empDataResult.data);
       }
+
+      const hs = await supabase.from("horarios_semanales").select("*").eq("id_peluqueria", userProfile.id_peluqueria);
+      if (hs.data && hs.data.length > 0) {
+        setHorariosSemanales(hs.data);
+      } else {
+        setHorariosSemanales(
+            Array.from({ length: 7 }, (_, i) => ({
+                dia_semana: i,
+                abierto: i !== 0,
+                inicio_manana: '09:00',
+                fin_manana: '14:00',
+                inicio_tarde: '16:00',
+                fin_tarde: '20:00',
+            }))
+        );
+      }
+      
+      const dc = await supabase.from("dias_cerrados").select("fecha").eq("id_peluqueria", userProfile.id_peluqueria);
+      setDiasCerrados(dc.data ?? []);
     }
     loadEmpleados();
   }, [authLoading, userProfile]);
@@ -1144,6 +1188,15 @@ export default function DashboardClient() {
 
                           {userProfile?.rol === 'admin' && (
                             <button
+                                onClick={() => setCitaAReprogramar(cita)}
+                                className="p-2 rounded-full text-neutral-500 hover:bg-indigo-500/10 hover:text-indigo-400 transition-colors cursor-pointer"
+                                title="Mover cita"
+                            >
+                                <CalendarClock className="w-4 h-4" />
+                            </button>
+                          )}
+                          {userProfile?.rol === 'admin' && (
+                            <button
                                 onClick={() => handleDeleteCita(cita)}
                                 className="p-2 rounded-full text-neutral-500 hover:bg-rose-500/10 hover:text-rose-400 transition-colors cursor-pointer"
                                 title="Eliminar cita"
@@ -1170,6 +1223,18 @@ export default function DashboardClient() {
             </div>
           </div>
         </main>
+        {isMounted && citaAReprogramar && (
+          <ModalReprogramar
+            cita={citaAReprogramar}
+            empleados={empleadosSalon}
+            idPeluqueria={userProfile?.id_peluqueria}
+            onClose={() => setCitaAReprogramar(null)}
+            onSuccess={() => {
+              setCitaAReprogramar(null);
+              setRefreshTrigger(prev => prev + 1);
+            }}
+          />
+        )}
         {isMounted && isManualModalOpen && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
             <div className="bg-neutral-900 border border-neutral-800 rounded-[2rem] max-w-lg w-full max-h-[90vh] overflow-y-auto shadow-2xl animate-in zoom-in-95 duration-200 custom-scrollbar">
@@ -1283,63 +1348,54 @@ export default function DashboardClient() {
 
                 <div className="space-y-4">
                   <div>
-                    <label className="block text-xs font-semibold text-neutral-400 uppercase tracking-wider mb-2">Fecha *</label>
-                    <div className="w-full bg-neutral-950 border border-neutral-800 rounded-2xl p-4">
-                      <div className="flex items-center justify-between mb-4">
-                        <button
-                          type="button"
-                          onClick={handlePrevMonth}
-                          className="p-1.5 rounded-lg hover:bg-neutral-800 text-neutral-400 hover:text-white transition-colors"
-                        >
-                          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" /></svg>
-                        </button>
-                        <span className="text-sm font-semibold text-neutral-200">
-                          {monthNames[calMonth]} {calYear}
+                    <label className="flex items-center gap-2 text-xs font-semibold text-neutral-400 uppercase tracking-wider mb-2">
+                        <CalendarIcon className="w-3.5 h-3.5" />
+                        Fecha *
+                    </label>
+
+                    <button
+                        type="button"
+                        onClick={() => setShowManualCalendar(prev => !prev)}
+                        className="w-full flex items-center justify-between bg-neutral-950 border border-neutral-800 rounded-xl px-4 py-3 text-left transition-all hover:border-indigo-500/50 focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/20 outline-none"
+                    >
+                        <span className="text-sm capitalize text-white">
+                            {manualCita.fecha ? format(new Date(`${manualCita.fecha}T00:00:00`), "EEEE d 'de' MMMM, yyyy", { locale: es }) : 'Selecciona una fecha'}
                         </span>
-                        <button
-                          type="button"
-                          onClick={handleNextMonth}
-                          className="p-1.5 rounded-lg hover:bg-neutral-800 text-neutral-400 hover:text-white transition-colors"
-                        >
-                          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
-                        </button>
-                      </div>
-                      
-                      <div className="grid grid-cols-7 text-center mb-2">
-                        {['L', 'M', 'X', 'J', 'V', 'S', 'D'].map(day => (
-                          <span key={day} className="text-[10px] font-semibold text-neutral-500 uppercase">
-                            {day}
-                          </span>
-                        ))}
-                      </div>
-                      
-                      <div className="grid grid-cols-7 gap-y-2 justify-items-center">
-                        {daysInMonth.map((date, idx) => {
-                          if (!date) {
-                            return <div key={`empty-${idx}`} className="w-9 h-9"></div>;
-                          }
-                          const disabled = isDateDisabled(date);
-                          const active = isSelected(date);
-                          return (
-                            <button
-                              key={date.toISOString()}
-                              type="button"
-                              disabled={disabled}
-                              onClick={() => handleSelectDate(date)}
-                              className={`w-9 h-9 rounded-full flex items-center justify-center text-xs transition-all ${
-                                disabled
-                                  ? 'text-neutral-600 cursor-not-allowed'
-                                  : active
-                                  ? 'bg-indigo-600 text-white font-bold'
-                                  : 'text-neutral-300 hover:bg-neutral-800 hover:text-white'
-                              }`}
-                            >
-                              {date.getDate()}
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </div>
+                        <ChevronDown className={`w-4 h-4 text-neutral-400 transition-transform duration-200 ${showManualCalendar ? 'rotate-180' : ''}`} />
+                    </button>
+
+                    {showManualCalendar && (
+                        <div className="mt-2 rounded-2xl border border-neutral-800 bg-neutral-950 p-2 shadow-xl overflow-hidden animate-in fade-in slide-in-from-top-2 duration-200 relative z-50">
+                            <style>{`
+                                .rdp {
+                                    --rdp-accent-color: #6366f1;
+                                    --rdp-background-color: rgba(99,102,241,0.15);
+                                    margin: 0;
+                                }
+                                .rdp-months { justify-content: center; }
+                                .rdp-month { width: 100%; }
+                                .rdp-table { width: 100%; }
+                                .rdp-head_cell { color: #6b7280; font-size: 0.7rem; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; padding: 0.5rem 0; }
+                                .rdp-day { width: 36px; height: 36px; border-radius: 10px; color: #d1d5db; font-size: 0.875rem; transition: background-color 0.15s; }
+                                .rdp-day:hover:not(.rdp-day_selected):not(.rdp-day_outside):not(.rdp-day_disabled) { background-color: #374151; color: #fff; }
+                                .rdp-day_selected { background-color: #6366f1 !important; color: #fff !important; font-weight: 600; }
+                                .rdp-day_today:not(.rdp-day_selected) { color: #818cf8; font-weight: 700; }
+                                .rdp-day_outside { color: #374151; opacity: 0.5; }
+                                .rdp-day_disabled { color: #4b5563 !important; opacity: 0.35; cursor: not-allowed; }
+                                .rdp-caption { color: #fff; font-weight: 600; padding: 0 0.5rem 0.75rem; display: flex; align-items: center; justify-content: space-between; }
+                                .rdp-caption_label { font-size: 0.9rem; text-transform: capitalize; }
+                                .rdp-nav_button { color: #9ca3af; border-radius: 8px; width: 28px; height: 28px; transition: background 0.15s, color 0.15s; }
+                                .rdp-nav_button:hover { background: #374151; color: #fff; }
+                            `}</style>
+                            <DayPicker
+                                mode="single"
+                                selected={manualCita.fecha ? new Date(`${manualCita.fecha}T00:00:00`) : undefined}
+                                onSelect={handleDaySelect}
+                                locale={es}
+                                disabled={[{ before: new Date() }, isDateDisabled]}
+                            />
+                        </div>
+                    )}
                   </div>
 
                   <div>
